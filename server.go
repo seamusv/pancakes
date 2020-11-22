@@ -10,57 +10,26 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"time"
 )
 
 const (
 	singlePortionEggsCount  = 2
 	singlePortionFlourGrams = 250
 	singlePortionMilkLitres = 0.35
+	totalFryingPans         = 3
 )
 
-func Server() {
+func Server() error {
 	kitchenInput := make(chan interface{}, 10)
 	kitchenOutput := make(chan interface{}, 5)
 	fryingPan := make(chan struct{}, 3)
 
-	go func() {
-		for {
-			select {
-			case <-fryingPan:
-				kitchenOutput <- PancakeReady{}
-			}
-		}
-	}()
+	for i := 0; i < totalFryingPans; i++ {
+		go configureFryingPan(fryingPan, kitchenOutput)
+	}
 
-	go func() {
-		ingredients := Ingredients{}
-
-		for {
-			select {
-			case inp := <-kitchenInput:
-				switch ingredient := inp.(type) {
-				case Eggs:
-					ingredients.eggs += ingredient.Count
-				case Flour:
-					ingredients.flour += ingredient.Grams
-				case Milk:
-					ingredients.milk += ingredient.Litres
-				default:
-					log.Printf("Unknown ingredient: %v", ingredient)
-				}
-				fmt.Printf("Ingredients on-hand: %v\n", ingredients)
-
-				kitchenOutput <- IngredientReceived{Ingredient: inp}
-
-				var portionIngredients *PortionIngredients
-				if ingredients, portionIngredients = from(ingredients); portionIngredients != nil {
-					for i := 0; i < portionIngredients.pancakeCount; i++ {
-						fryingPan <- struct{}{}
-					}
-				}
-			}
-		}
-	}()
+	go configureKitchenPrep(kitchenInput, fryingPan, kitchenOutput)
 
 	err := http.ListenAndServe(":8080", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
@@ -86,7 +55,6 @@ func Server() {
 				for {
 					select {
 					case result := <-kitchenOutput:
-						fmt.Printf("Sending %v\n", result)
 						if err := encoder.Encode(result); err != nil {
 							log.Print(err)
 							return
@@ -94,7 +62,6 @@ func Server() {
 						_ = w.Flush()
 
 					case <-quit:
-						fmt.Println("Quitting...")
 						return
 					}
 				}
@@ -118,46 +85,85 @@ func Server() {
 					return
 				}
 
-				switch resp["ingredient"] {
-				case "eggs":
-					var i Eggs
-					if err := mapstructure.Decode(resp, &i); err == nil {
-						kitchenInput <- i
-					}
-				case "flour":
-					var i Flour
-					if err := mapstructure.Decode(resp, &i); err == nil {
-						kitchenInput <- i
-					}
-				case "milk":
-					var i Milk
-					if err := mapstructure.Decode(resp, &i); err == nil {
-						kitchenInput <- i
-					}
-				default:
-					log.Printf("Unknown ingredient: %v", resp)
+				if ingredient, err := convertIngredient(resp); err != nil {
+					log.Print(err)
+					return
+				} else {
+					kitchenInput <- ingredient
 				}
 			}
 		}()
 	}))
 
-	log.Fatal(err)
+	return err
 }
 
-type (
-	Ingredients struct {
-		eggs  int
-		flour int
-		milk  float64
+func configureFryingPan(fryingPanInput chan struct{}, kitchenOutput chan interface{}) {
+	for {
+		select {
+		case <-fryingPanInput:
+			time.Sleep(time.Second * 2)
+			kitchenOutput <- PancakeReady{}
+		}
+	}
+}
+
+func configureKitchenPrep(kitchenInput chan interface{}, fryingPanInput chan struct{}, kitchenOutput chan interface{}) {
+	ingredients := Ingredients{}
+
+	for {
+		select {
+		case inp := <-kitchenInput:
+			switch ingredient := inp.(type) {
+			case Eggs:
+				ingredients.eggs += ingredient.Count
+			case Flour:
+				ingredients.flour += ingredient.Grams
+			case Milk:
+				ingredients.milk += ingredient.Litres
+			default:
+				log.Printf("Unknown ingredient: %v", ingredient)
+			}
+
+			kitchenOutput <- IngredientReceived{Ingredient: inp}
+
+			var portionIngredients *PortionIngredients
+			if ingredients, portionIngredients = processPortions(ingredients); portionIngredients != nil {
+				for i := 0; i < portionIngredients.pancakeCount; i++ {
+					fryingPanInput <- struct{}{}
+				}
+			}
+		}
+	}
+}
+
+func convertIngredient(resp map[string]interface{}) (interface{}, error) {
+	var result interface{}
+	var err error
+	switch resp["ingredient"] {
+	case "eggs":
+		var i Eggs
+		if err = mapstructure.Decode(resp, &i); err == nil {
+			result = i
+		}
+	case "flour":
+		var i Flour
+		if err = mapstructure.Decode(resp, &i); err == nil {
+			result = i
+		}
+	case "milk":
+		var i Milk
+		if err = mapstructure.Decode(resp, &i); err == nil {
+			result = i
+		}
+	default:
+		err = fmt.Errorf("unknown ingredient: %v", resp)
 	}
 
-	PortionIngredients struct {
-		ingredients  Ingredients
-		pancakeCount int
-	}
-)
+	return result, err
+}
 
-func from(ingredients Ingredients) (Ingredients, *PortionIngredients) {
+func processPortions(ingredients Ingredients) (Ingredients, *PortionIngredients) {
 	portions := int(math.Min(
 		float64(ingredients.flour)/singlePortionFlourGrams,
 		math.Min(
@@ -185,3 +191,16 @@ func from(ingredients Ingredients) (Ingredients, *PortionIngredients) {
 
 	return ingredients, portionIngredients
 }
+
+type (
+	Ingredients struct {
+		eggs  int
+		flour int
+		milk  float64
+	}
+
+	PortionIngredients struct {
+		ingredients  Ingredients
+		pancakeCount int
+	}
+)

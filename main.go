@@ -1,6 +1,9 @@
 package main
 
-import "flag"
+import (
+	"flag"
+	"log"
+)
 
 var (
 	clientMode = flag.Bool("c", false, "run in client mode")
@@ -8,9 +11,15 @@ var (
 
 func main() {
 	flag.Parse()
+
+	var err error
 	if *clientMode {
-		Client()
+		err = Client()
 	} else {
-		Server()
+		err = Server()
+	}
+
+	if err != nil {
+		log.Print(err)
 	}
 }
