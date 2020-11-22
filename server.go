@@ -25,7 +25,7 @@ func Server() error {
 
 			defer func() {
 				_ = conn.Close()
-				quit <- struct{}{}
+				close(quit)
 			}()
 
 			kitchenInput := make(chan interface{}, 10)
