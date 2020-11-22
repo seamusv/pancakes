@@ -6,6 +6,7 @@ import (
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/mitchellh/mapstructure"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -55,7 +56,9 @@ func Server() error {
 			for {
 				b, err := wsutil.ReadClientText(conn)
 				if err != nil {
-					log.Print(err)
+					if err != io.EOF {
+						log.Print(err)
+					}
 					return
 				}
 
