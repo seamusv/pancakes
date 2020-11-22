@@ -27,6 +27,13 @@ type (
 	IngredientReceivedWrapper IngredientReceived
 )
 
+func encode(i interface{}) []byte {
+	if res, err := json.Marshal(i); err == nil {
+		return res
+	}
+	return []byte("{}")
+}
+
 func (v Eggs) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		EggsWrapper
@@ -63,7 +70,7 @@ func (v PancakeReady) MarshalJSON() ([]byte, error) {
 		Status string `json:"status"`
 	}{
 		PancakeReadyWrapper: PancakeReadyWrapper(v),
-		Status:              "pancakeReady",
+		Status:              "pancake-ready",
 	})
 }
 
@@ -73,6 +80,6 @@ func (v IngredientReceived) MarshalJSON() ([]byte, error) {
 		Status string `json:"status"`
 	}{
 		IngredientReceivedWrapper: IngredientReceivedWrapper(v),
-		Status:                    "ingredientReceived",
+		Status:                    "ingredient-received",
 	})
 }

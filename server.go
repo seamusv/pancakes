@@ -6,11 +6,9 @@ import (
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/mitchellh/mapstructure"
-	"io"
 	"log"
 	"math"
 	"net/http"
-	"time"
 )
 
 const (
@@ -21,22 +19,8 @@ const (
 )
 
 func Server() error {
-	kitchenInput := make(chan interface{}, 10)
-	kitchenOutput := make(chan interface{}, 5)
-	fryingPan := make(chan struct{}, 3)
-
-	for i := 0; i < totalFryingPans; i++ {
-		go configureFryingPan(fryingPan, kitchenOutput)
-	}
-
-	go configureKitchenPrep(kitchenInput, fryingPan, kitchenOutput)
-
 	err := http.ListenAndServe(":8080", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, _, _, err := ws.UpgradeHTTP(r, w)
-		if err != nil {
-			// handle error
-		}
-		go func() {
+		if conn, _, _, err := ws.UpgradeHTTP(r, w); err == nil {
 			quit := make(chan struct{})
 
 			defer func() {
@@ -44,22 +28,23 @@ func Server() error {
 				quit <- struct{}{}
 			}()
 
-			var (
-				r       = wsutil.NewReader(conn, ws.StateServerSide)
-				w       = wsutil.NewWriter(conn, ws.StateServerSide, ws.OpText)
-				decoder = json.NewDecoder(r)
-				encoder = json.NewEncoder(w)
-			)
+			kitchenInput := make(chan interface{}, 10)
+			kitchenOutput := make(chan interface{}, 5)
+			fryingPan := make(chan struct{}, 10)
+
+			for i := 0; i < totalFryingPans; i++ {
+				go configureFryingPan(fryingPan, kitchenOutput, quit)
+			}
+
+			go configureKitchenPrep(kitchenInput, fryingPan, kitchenOutput, quit)
 
 			go func() {
 				for {
 					select {
 					case result := <-kitchenOutput:
-						if err := encoder.Encode(result); err != nil {
+						if err := wsutil.WriteServerText(conn, encode(result)); err != nil {
 							log.Print(err)
-							return
 						}
-						_ = w.Flush()
 
 					case <-quit:
 						return
@@ -68,19 +53,14 @@ func Server() error {
 			}()
 
 			for {
-				hdr, err := r.NextFrame()
+				b, err := wsutil.ReadClientText(conn)
 				if err != nil {
-					if err != io.ErrUnexpectedEOF {
-						log.Print(err)
-						return
-					}
-				}
-				if hdr.OpCode == ws.OpClose {
+					log.Print(err)
 					return
 				}
 
 				var resp = make(map[string]interface{})
-				if err := decoder.Decode(&resp); err != nil {
+				if err := json.Unmarshal(b, &resp); err != nil {
 					log.Print(err)
 					return
 				}
@@ -92,23 +72,25 @@ func Server() error {
 					kitchenInput <- ingredient
 				}
 			}
-		}()
+		}
 	}))
 
 	return err
 }
 
-func configureFryingPan(fryingPanInput chan struct{}, kitchenOutput chan interface{}) {
+func configureFryingPan(fryingPanInput chan struct{}, kitchenOutput chan interface{}, quit chan struct{}) {
 	for {
 		select {
 		case <-fryingPanInput:
-			time.Sleep(time.Second * 2)
 			kitchenOutput <- PancakeReady{}
+
+		case <-quit:
+			return
 		}
 	}
 }
 
-func configureKitchenPrep(kitchenInput chan interface{}, fryingPanInput chan struct{}, kitchenOutput chan interface{}) {
+func configureKitchenPrep(kitchenInput chan interface{}, fryingPanInput chan struct{}, kitchenOutput chan interface{}, quit chan struct{}) {
 	ingredients := Ingredients{}
 
 	for {
@@ -133,6 +115,9 @@ func configureKitchenPrep(kitchenInput chan interface{}, fryingPanInput chan str
 					fryingPanInput <- struct{}{}
 				}
 			}
+
+		case <-quit:
+			return
 		}
 	}
 }
